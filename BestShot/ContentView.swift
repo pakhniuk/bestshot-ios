@@ -6,11 +6,17 @@
 import Photos
 import SwiftUI
 
+struct PhotoGroup: Identifiable {
+    let id: String
+    let photos: [PHAsset]
+}
+
 struct ContentView: View {
     @State private var authorizationStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @State private var photoCount: Int?
     @State private var recentPhotos: [PHAsset] = []
     @State private var isLoadingPhotos = false
+    @State private var selectedIDs: Set<String> = []
 
     private let imageManager = PHCachingImageManager()
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: 2)]
@@ -23,6 +29,10 @@ struct ContentView: View {
         default:
             false
         }
+    }
+
+    private var photoGroups: [PhotoGroup] {
+        groupPhotos(recentPhotos)
     }
 
     var body: some View {
@@ -66,9 +76,19 @@ struct ContentView: View {
 
     private var photoLibraryView: some View {
         VStack(spacing: 0) {
-            Text("You have \(photoCount ?? 0) photos")
+            Text("Selected: \(selectedIDs.count)")
                 .font(.title2)
-                .padding()
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.top)
+
+            Text("You have \(photoCount ?? 0) photos")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
 
             if isLoadingPhotos {
                 Spacer()
@@ -81,13 +101,87 @@ struct ContentView: View {
                             PhotoThumbnail(
                                 asset: asset,
                                 imageManager: imageManager,
-                                targetSize: thumbnailSize
+                                targetSize: thumbnailSize,
+                                isSelected: selectedIDs.contains(asset.localIdentifier),
+                                onTap: { toggleSelection(asset.localIdentifier) }
                             )
                         }
                     }
                     .padding(2)
+
+                    Text("Groups found: \(photoGroups.count)")
+                        .font(.title3)
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.top, 16)
+
+                    ForEach(photoGroups) { group in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("\(group.photos.count) photos")
+                                .font(.headline)
+                                .padding(.horizontal)
+
+                            LazyVGrid(columns: columns, spacing: 2) {
+                                ForEach(group.photos, id: \.localIdentifier) { asset in
+                                    PhotoThumbnail(
+                                        asset: asset,
+                                        imageManager: imageManager,
+                                        targetSize: thumbnailSize,
+                                        isSelected: false,
+                                        onTap: {}
+                                    )
+                                }
+                            }
+                            .padding(.horizontal, 2)
+                        }
+                        .padding(.bottom, 12)
+                    }
                 }
             }
+        }
+    }
+
+    private func groupPhotos(_ photos: [PHAsset], windowSeconds: TimeInterval = 10) -> [PhotoGroup] {
+        let datedPhotos = photos.compactMap { asset -> (PHAsset, Date)? in
+            guard let date = asset.creationDate else { return nil }
+            return (asset, date)
+        }
+        .sorted { $0.1 < $1.1 }
+
+        var groups: [[PHAsset]] = []
+        var currentGroup: [PHAsset] = []
+        var lastDate: Date?
+
+        for (asset, date) in datedPhotos {
+            if let lastDate, date.timeIntervalSince(lastDate) <= windowSeconds {
+                currentGroup.append(asset)
+            } else {
+                if currentGroup.count > 1 {
+                    groups.append(currentGroup)
+                }
+                currentGroup = [asset]
+            }
+            lastDate = date
+        }
+
+        if currentGroup.count > 1 {
+            groups.append(currentGroup)
+        }
+
+        return groups.map { photos in
+            PhotoGroup(
+                id: photos[0].localIdentifier,
+                photos: photos
+            )
+        }
+    }
+
+    private func toggleSelection(_ id: String) {
+        if selectedIDs.contains(id) {
+            selectedIDs.remove(id)
+        } else {
+            selectedIDs.insert(id)
         }
     }
 
@@ -160,6 +254,8 @@ private struct PhotoThumbnail: View {
     let asset: PHAsset
     let imageManager: PHCachingImageManager
     let targetSize: CGSize
+    let isSelected: Bool
+    let onTap: () -> Void
 
     @State private var image: UIImage?
 
@@ -173,7 +269,23 @@ private struct PhotoThumbnail: View {
                         .scaledToFill()
                 }
             }
+            .overlay {
+                if isSelected {
+                    Color.black.opacity(0.25)
+                }
+            }
+            .overlay(alignment: .topTrailing) {
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title2)
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, .blue)
+                        .padding(6)
+                }
+            }
             .clipped()
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
             .onAppear(perform: loadThumbnail)
     }
 
